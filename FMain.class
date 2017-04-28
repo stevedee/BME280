@@ -1,0 +1,290 @@
+' Gambas class file
+
+' ******************************************************************
+' BME280 - a Gambas program for the Bosch BME280
+' Temperature, Humidity & Pressure measurement on the Raspberry Pi.
+' 
+' Steve Davis
+' 28-April-2017
+' 
+' Requires Gordon Hendersons wiringPi
+' Enable i2c support on Pi.
+' Also install i2c-tools & use "i2cdetect 1" to find chip address
+' *******************************************************************
+
+Library "/usr/local/lib/libwiringPi"
+Public Extern wiringPiSetup() As Integer
+'i2c stuff
+Public Extern wiringPiI2CSetup(ChipID As Integer) As Integer
+Public Extern wiringPiI2CRead(intFd As Integer) As Integer
+Public Extern wiringPiI2CReadReg8(intHandle As Integer, intMem As Integer) As Integer
+Public Extern wiringPiI2CReadReg16(intHandle As Integer, intMem As Integer) As Integer
+
+Public Extern wiringPiI2CWriteReg8(intHandle As Integer, intReg As Integer, intData As Integer) As Integer
+Public Extern wiringPiI2CWriteReg16(intHandle As Integer, intReg As Integer, intData As Integer) As Integer
+Public Extern wiringPiI2CWrite(intHandle As Integer, intData As Integer) As Integer
+
+Const CHIP_ADDR As Integer = 119          'BME280 0x77
+Const CHIP_ID_ADDR As Integer = 208       '0xD0
+
+Const DATA_PRESSURE As Integer = 247      '0xF7 = msb, 0xF8 = lsb, 0xF9 = xlsb
+Const DATA_TEMPERATURE As Integer = 250   '0xFA =msb, 0xFB = lsb, 0xFC = xlsb (bit 4 to 7)
+Const DATA_HUMIDITY As Integer = 253      '0xFD = msb, 0xFE = lsb
+
+Public intHumidity As Integer
+Public intPressure As Integer
+Public intTemperature As Integer
+
+Public CTRL_HUMIDITY As Integer = 242     '0xF2
+Public CTRL_MEASURE As Integer = 244        '0xF4
+
+'Calibration/trimming 
+Const CAL_DIG_T1 As Integer = 136        '0x88 = lsb, 0x89 = msb
+Const CAL_DIG_T2 As Integer = 138        '0x8A = lsb, 0x8B = msb
+Const CAL_DIG_T3 As Integer = 140        '0x8C = lsb, 0x8D = msb
+Const CAL_DIG_P1 As Integer = 142        '0x8E = lsb, 0x8F = msb
+Const CAL_DIG_P2 As Integer = 144        '0x90 = lsb, 0x91 = msb
+Const CAL_DIG_P3 As Integer = 146        '0x92 = lsb, 0x93 = msb
+Const CAL_DIG_P4 As Integer = 148        '0x94 = lsb, 0x95 = msb
+Const CAL_DIG_P5 As Integer = 150        '0x96 = lsb, 0x97 = msb
+Const CAL_DIG_P6 As Integer = 152        '0x98 = lsb, 0x99 = msb
+Const CAL_DIG_P7 As Integer = 154        '0x9A = lsb, 0x9B = msb
+Const CAL_DIG_P8 As Integer = 156        '0x9C = lsb, 0x9D = msb
+Const CAL_DIG_P9 As Integer = 158        '0x9E = lsb, 0x9F = msb
+
+Const CAL_DIG_H1 As Integer = 161        '0xA1
+
+Const CAL_DIG_H2 As Integer = 225        '0xE1 = lsb, 0xE2 = msb
+Const CAL_DIG_H3 As Integer = 227        '0xE3
+Const CAL_DIG_H4 As Integer = 228        '0xE4 = H4 msb
+                              '229    0xE5: b0-3=H4 lsb, b4-7=H5 lsb
+Const CAL_DIG_H5 As Integer = 230        '0xE6 = H5 msb
+Const CAL_DIG_H6 As Integer = 231        '0xE7
+
+Public CDigT1 As Integer
+Public CDigT2 As Integer
+Public CDigT3 As Integer
+Public CDigP1 As Integer
+Public CDigP2 As Integer
+Public CDigP3 As Integer
+Public CDigP4 As Integer
+Public CDigP5 As Integer
+Public CDigP6 As Integer
+Public CDigP7 As Integer
+Public CDigP8 As Integer
+Public CDigP9 As Integer
+
+Public CDigH1 As Integer
+Public CDigH2 As Integer
+Public CDigH3 As Integer
+Public CDigH4 As Integer
+Public CDigH5 As Integer
+Public CDigH6 As Integer
+
+Public intDeviceHandle As Integer
+
+Public lngRawTemp As Long
+Public lngRawHumid As Long
+Public lngRawPressure As Long
+
+Public intTempFineResolution As Integer
+
+Public Sub _new()
+
+End
+
+Public Sub Form_Open()
+
+  If wiringPiSetup() = -1 Then
+    lblStatus.Text = "Setup failed"
+  Else
+    lblStatus.Text = "wiringPi initialised OK"
+    tmrStartup.Start()
+  Endif
+Catch
+    lblStatus.Text = Error.Text
+End
+
+Public Sub tmrStartup_Timer()
+
+  tmrStartup.Stop()
+  lblChipAddr.Text = "using chip address: " & CHIP_ADDR
+  intDeviceHandle = wiringPiI2CSetup(CHIP_ADDR)
+  lblChipID.Text = "chip id: " & wiringPiI2CReadReg8(intDeviceHandle, CHIP_ID_ADDR)
+  lblStatus.Width = Me.Width
+  If LoadCalibrationData() Then
+    lblStatus.Text = "Cal data loaded"
+  Else
+    lblStatus.Text = "Cal data NOT loaded"
+  Endif
+  tmrRead.Start()
+Catch
+  lblStatus.Text = Error.Text
+End
+
+Public Function LoadCalibrationData() As Boolean
+Dim msb As Integer
+Dim lsb As Integer
+Dim xsb As Integer
+Dim shtData As Short
+Dim shtMsb As Short
+  
+  CDigH1 = wiringPiI2CReadReg8(intDeviceHandle, CAL_DIG_H1)
+
+  CDigH2 = CShort(wiringPiI2CReadReg16(intDeviceHandle, CAL_DIG_H2))
+
+  CDigH3 = wiringPiI2CReadReg8(intDeviceHandle, CAL_DIG_H3)
+  
+  msb = wiringPiI2CReadReg8(intDeviceHandle, CAL_DIG_H4)
+  lsb = wiringPiI2CReadReg8(intDeviceHandle, CAL_DIG_H4 + 1)
+  CDigH4 = Shl(msb, 4) Or (lsb And 15)                  'mask 15 = 0x0F
+  
+  msb = wiringPiI2CReadReg8(intDeviceHandle, CAL_DIG_H5)
+  lsb = wiringPiI2CReadReg8(intDeviceHandle, CAL_DIG_H4 + 1)
+  CDigH5 = Shl(msb, 4) Or Shr(lsb, 4)
+  
+  CDigH6 = CByte(wiringPiI2CReadReg8(intDeviceHandle, CAL_DIG_H6))
+
+  CDigP1 = wiringPiI2CReadReg16(intDeviceHandle, CAL_DIG_P1)
+  
+  CDigP2 = CShort(wiringPiI2CReadReg16(intDeviceHandle, CAL_DIG_P2))
+
+  CDigP3 = CShort(wiringPiI2CReadReg16(intDeviceHandle, CAL_DIG_P3))
+
+  CDigP4 = CShort(wiringPiI2CReadReg16(intDeviceHandle, CAL_DIG_P4))
+  
+  CDigP5 = CShort(wiringPiI2CReadReg16(intDeviceHandle, CAL_DIG_P5))
+  
+  CDigP6 = CShort(wiringPiI2CReadReg16(intDeviceHandle, CAL_DIG_P6))
+  
+  CDigP7 = CShort(wiringPiI2CReadReg16(intDeviceHandle, CAL_DIG_P7))
+  
+  CDigP8 = CShort(wiringPiI2CReadReg16(intDeviceHandle, CAL_DIG_P8))
+  
+  CDigP9 = CShort(wiringPiI2CReadReg16(intDeviceHandle, CAL_DIG_P9))
+  
+  CDigT1 = wiringPiI2CReadReg16(intDeviceHandle, CAL_DIG_T1)
+
+  CDigT2 = CShort(wiringPiI2CReadReg16(intDeviceHandle, CAL_DIG_T2))
+
+  CDigT3 = CShort(wiringPiI2CReadReg8(intDeviceHandle, CAL_DIG_T3))
+
+  Return True
+
+Catch
+  lblStatus.Text = "LoadCalData: " & Error.Text
+End
+
+Public Function Config() As Boolean
+  
+  wiringPiI2CWriteReg8(intDeviceHandle, CTRL_HUMIDITY, 1)   '0xf2, 0x01 Humid sampling x1
+  wiringPiI2CWriteReg8(intDeviceHandle, CTRL_MEASURE, 37)    '0xf4, 0x25 Temp & Press sampling x1, forced mode
+  
+End
+
+Public Sub tmrRead_Timer()
+
+  Config()
+  ReadTemp()
+  ReadHumidity()
+  ReadPressure()
+  lblTemp.Text = "Temp: " & Format(TemperatureCalculation() / 100, "0.00") & "'C"
+  lblHumid.Text = "Humidity: " & Format(HumidityCalculation(), "0.00") & "%RH"
+  lblPress.Text = "Pressure: " & Format(PressureCalculation() / 100, "0.00") & "mbar"
+End
+
+
+Public Function ReadTemp() As Long
+Dim msb As Integer
+Dim lsb As Integer
+Dim xsb As Integer
+  
+  msb = wiringPiI2CReadReg8(intDeviceHandle, DATA_TEMPERATURE)
+  lsb = wiringPiI2CReadReg8(intDeviceHandle, DATA_TEMPERATURE + 1)
+  xsb = wiringPiI2CReadReg8(intDeviceHandle, DATA_TEMPERATURE + 2)
+  lngRawTemp = Shl(msb, 12) Or Shl(lsb, 4) Or Shr(xsb, 4)
+  Return lngRawTemp
+End
+
+Public Function ReadHumidity() As Long
+' Dim lngRawHumid As Long
+Dim msb As Integer
+Dim lsb As Integer
+
+  msb = wiringPiI2CReadReg8(intDeviceHandle, DATA_HUMIDITY)
+  lsb = wiringPiI2CReadReg8(intDeviceHandle, DATA_HUMIDITY + 1)
+  lngRawHumid = Shl(msb, 8) Or lsb
+  Return lngRawHumid
+End
+
+Public Function ReadPressure() As Long
+Dim msb As Integer
+Dim lsb As Integer
+Dim xsb As Integer
+
+  msb = wiringPiI2CReadReg8(intDeviceHandle, DATA_PRESSURE)
+  lsb = wiringPiI2CReadReg8(intDeviceHandle, DATA_PRESSURE + 1)
+  xsb = wiringPiI2CReadReg8(intDeviceHandle, DATA_PRESSURE + 2)
+  lngRawPressure = Shl(msb, 12) Or Shl(lsb, 4) Or Shr(xsb, 4)
+  Return lngRawPressure
+End
+
+Public Function TemperatureCalculation() As Float
+Dim intVar1 As Long 
+Dim intVar2 As Long
+Dim fTempC As Float
+  
+  intVar1 = Shr((Shr(lngRawTemp, 3) - Shl(CDigT1, 1)) * CDigT2, 11)
+  intVar2 = Shr(Shr((Shr(lngRawTemp, 4) - CDigT1) * (Shr(lngRawTemp, 4) - CDigT1), 12) * CDigT3, 14)
+  intTempFineResolution = intVar1 + intVar2
+  fTempC = Shr((intVar1 + intVar2) * 5 + 128, 8)
+  Return fTempC
+Catch
+  lblStatus.Text = "TempCalc: " & Error.Text
+End
+
+Public Function HumidityCalculation() As Float
+Dim intVar As Integer 
+Dim fHumid As Float
+  
+  intVar = intTempFineResolution - 76800
+  intVar = Shr((Shl(lngRawHumid, 14) - Shl(CDigH4, 20) - (CDigH5 * intVar)) + 16384, 15)
+  intVar = intVar * Shr(((Shr(Shr(intVar * CDigH6, 10) * (Shr(intVar * CDigH3, 11) + 32768), 10) + 2097152) * CDigH2 + 8192), 14)
+  intVar = intVar - Shr((Shr(Shr(intVar, 15) * Shr(intVar, 15), 7)) * CDigH1, 4)
+  If intVar < 0 Then
+    intVar = 0
+  Endif
+  If intVar > 419430400 Then
+    intVar = 419430400
+  Endif
+  fHumid = Shr(intVar, 12) / 1024
+  Return fHumid
+Catch
+  lblStatus.Text = "HumidCalc: " & Error.Text
+End
+
+Public Sub PressureCalculation() As Float
+Dim lngPress As Long
+Dim lngVar1 As Long
+Dim lngVar2 As Long
+Dim lngVar3 As Long
+  
+  lngVar3 = 1
+  lngVar3 = Shl(lngVar3, 47)
+  lngVar1 = intTempFineResolution - 128000
+  lngVar2 = lngVar1 * lngVar1 * CDigP6
+  lngVar2 = lngVar2 + Shl(lngVar1 * CDigP5, 17)
+  lngVar2 = lngVar2 + Shl(CLong(CDigP4), 35)
+  lngVar1 = Shr(lngVar1 * lngVar1 * CDigP3, 8) + Shl(lngVar1 * CDigP2, 12)
+  lngVar1 = Shr((lngVar3 + lngVar1) * (CDigP1), 33)
+  lngPress = 1048576 - lngRawPressure
+  lngPress = ((Shl(lngPress, 31) - lngVar2) * 3125) / lngVar1
+  lngVar1 = Shr(CDigP9 * Shr(lngPress, 13) * Shr(lngPress, 13), 25)
+  lngVar2 = Shr(CDigP8 * lngPress, 19)
+  lngPress = Shr(lngPress + lngVar1 + lngVar2, 8) + Shl(CDigP7, 4)
+  Return CFloat(lngPress / 256)
+  
+Catch
+  lblStatus.Text = "PressCalc: " & Error.Text
+  Return 0
+End

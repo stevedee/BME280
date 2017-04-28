@@ -1,0 +1,46 @@
+# Gambas Form File 3.0
+
+{ Form Form
+  MoveScaled(5.5556,5.5556,50,50)
+  { lblChipAddr Label
+    MoveScaled(1,3,45,4)
+    Text = ("Chip address")
+  }
+  { tmrStartup #Timer
+    #MoveScaled(28,39)
+  }
+  { lblChipID Label
+    MoveScaled(1,7,45,4)
+    Text = ("Chip ID")
+  }
+  { lblStatus Label
+    MoveScaled(0,46,50,4)
+    Text = ("status")
+    Border = Border.Sunken
+  }
+  { lblTemp Label
+    MoveScaled(2,17,44,4)
+    Font = Font["+3"]
+    Foreground = &HFF7F00&
+    Text = ("temperature")
+    Alignment = Align.Center
+  }
+  { tmrRead #Timer
+    #MoveScaled(37,38)
+    Delay = 2000
+  }
+  { lblHumid Label
+    MoveScaled(2,22,44,4)
+    Font = Font["+3"]
+    Foreground = &H7F00FF&
+    Text = ("relative humidity")
+    Alignment = Align.Center
+  }
+  { lblPress Label
+    MoveScaled(2,27,44,4)
+    Font = Font["+3"]
+    Foreground = &H0000FF&
+    Text = ("atmospheric pressure")
+    Alignment = Align.Center
+  }
+}
